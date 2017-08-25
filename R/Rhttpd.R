@@ -98,12 +98,13 @@ RhttpdErrorStream <- setRefClass(
 
 Rhttpd <- setRefClass(
     'Rhttpd',
-    fields = c('appList','listenAddr','httpdOrig','listenPort'),
+    fields = c('appList','listenAddr','httpdOrig','listenPort', 'isStarted'),
     methods = list(
 	initialize = function(...){
 	    appList <<- list()
 	    listenAddr <<- '127.0.0.1'
 	    listenPort <<- 0L
+	    isStarted <<- FALSE
 	    callSuper(...)
 	},
 	finalize = function(){
@@ -146,6 +147,74 @@ Rhttpd <- setRefClass(
 	    base::stop("Argument must be an integer or character")
 	},
 	browse = function(x) open(x),
+#sDH = function (start = TRUE, listenIP='127.0.0.1', listenPort=getOption('help.ports'))
+sDH = function (start = TRUE)
+{
+
+    if (nzchar(Sys.getenv("R_DISABLE_HTTPD"))) {
+        httpdPort(-1L)
+        warning("httpd server disabled by R_DISABLE_HTTPD", immediate. = TRUE)
+        utils::flush.console()
+        return(invisible(.self$listenPort))
+    }
+    port <- .self$listenPort
+    if (is.na(start)) {
+        if (port <= 0L)
+            return(sDH(TRUE))
+        return(invisible(port))
+    }
+    if (start && .self$isStarted) {
+        if (port > 0L)
+            stop("server already running")
+        else stop("server could not be started on an earlier attempt")
+    }
+    if (!start && (port <= 0L))
+        stop("no running server to stop")
+    if (start) {
+        utils::flush.console()
+        OK <- FALSE
+        ports <- getOption("help.ports")
+        if (is.null(ports)) {
+            #ports <- 10000 + 22000 * ((stats::runif(10) + unclass(Sys.time())/300)%%1)
+            ports <- listenPort
+        }
+        ports <- as.integer(ports)
+        if (all(ports == 0))
+            return(invisible(0))
+        message("starting httpd server ...", appendLF = FALSE)
+        for (i in seq_along(ports)) {
+            #status <- .Call(C_startHTTPD, "127.0.0.1", ports[i])
+            status <- .Call(tools:::C_startHTTPD, .self$listenAddr, port)
+            if (status == 0L) {
+                OK <- TRUE
+                #httpdPort(ports[i])
+                .self$isStarted <- TRUE
+                break
+            }
+            if (status != -2L)
+                break
+        }
+        if (OK) {
+            message(" done")
+            utils::flush.console()
+        }
+        else {
+            warning("failed to start the httpd server", immediate. = TRUE)
+            utils::flush.console()
+            #httpdPort(-1L)
+            .self$listenPort <- -1L
+            .self$isStarted <- FALSE
+        }
+    }
+    else {
+        .Call(tools:::C_stopHTTPD)
+        #httpdPort(0L)
+        .self$listenPort <- 0L
+        .self$isStarted <- FALSE
+    }
+    #invisible(httpdPort())
+    invisible(port)
+},
    start = function(listen='127.0.0.1',port=getOption('help.ports'),quiet=FALSE){
 
       if(nzchar(Sys.getenv("R_DISABLE_HTTPD"))) {
@@ -162,22 +231,24 @@ Rhttpd <- setRefClass(
          return(invisible())
       }
 
-      if (!missing(listen) && listen != '127.0.0.1'){
-         listen <- '127.0.0.1'
-         warning("This version of Rook can only listen on the loopback device.");
-      }
+      #if (!missing(listen) && listen != '127.0.0.1'){
+      #   listen <- '127.0.0.1'
+      #   warning("This version of Rook can only listen on the loopback device.");
+      #}
+      .self$listenAddr = listen
 
       if (!missing(port)){
          oldPorts <- getOption('help.ports')
          on.exit(options(help.ports=oldPorts))
          options(help.ports=port)
+         .self$listenPort=port
       }
 
       if (length(appList) == 0)
          add(RhttpdApp$new(system.file('exampleApps/RookTestApp.R',package='Rook'),name='RookTest'))
 
 
-      listenPort <<- startDynamicHelp(TRUE)
+      listenPort <<- sDH(TRUE)
 
       if (listenPort == 0){
          base::stop("The internal web server could not be started!")
@@ -193,7 +264,7 @@ Rhttpd <- setRefClass(
    },
 
 	stop = function(){
-	    listenPort <<- startDynamicHelp(FALSE)
+	    listenPort <<- sDH(FALSE)
 	},
 	add = function(app=NULL,name=NULL){
 
